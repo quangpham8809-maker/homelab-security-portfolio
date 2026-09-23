@@ -1,1 +1,287 @@
+============================================================
+Proxmox VE - Sanitized Network Configuration
+============================================================
 
+Purpose:
+This file contains a sanitized example of the network
+configuration used on the main Proxmox VE host in my homelab.
+
+The configuration focuses on:
+
+- VLAN-aware Linux bridges
+- Dedicated management VLAN
+- OPNsense trunk connectivity
+- Separate AP / IoT / Guest bridge
+- Explicit VLAN tagging
+- Network separation
+
+Sensitive information such as credentials, certificates,
+public addresses and secrets has intentionally been excluded.
+
+
+============================================================
+1. PHYSICAL INTERFACES
+============================================================
+
+enp2s0
+enp3s0
+enp4s0
+enp5s0
+
+The host uses multiple physical interfaces for different
+network roles.
+
+Main internal trunk:
+enp3s0
+
+Separate bridge:
+enp4s0
+
+ASUS / AP network:
+enp5s0
+
+
+============================================================
+2. MAIN VLAN-AWARE BRIDGE
+============================================================
+
+auto vmbr1
+iface vmbr1 inet manual
+        bridge-ports enp3s0
+        bridge-stp off
+        bridge-fd 0
+        bridge-vlan-aware yes
+        bridge-vids 2-4094
+
+Purpose:
+
+vmbr1 is the main internal VLAN trunk.
+
+The bridge itself has no management IP address.
+
+It transports tagged VLAN traffic between:
+
+- Proxmox virtual machines
+- LXC containers
+- OPNsense
+- TP-Link switch
+
+
+============================================================
+3. PROXMOX MANAGEMENT VLAN
+============================================================
+
+auto vmbr1.10
+iface vmbr1.10 inet static
+        address 172.16.10.3/27
+        gateway 172.16.10.1
+
+Purpose:
+
+Proxmox management is placed in VLAN 10.
+
+The management IP is not assigned directly to vmbr1.
+
+Instead, the host uses:
+
+vmbr1.10
+VLAN ID: 10
+IP: 172.16.10.3/27
+
+
+This makes management traffic explicitly tagged and separates
+it from the base bridge.
+
+
+============================================================
+4. SEPARATE BRIDGE
+============================================================
+
+auto vmbr2
+iface vmbr2 inet manual
+        bridge-ports enp4s0
+        bridge-stp off
+        bridge-fd 0
+        bridge-vlan-aware yes
+        bridge-vids 2-4094
+
+Purpose:
+
+vmbr2 is used as a separate bridge for additional network
+connectivity.
+
+
+============================================================
+5. ASUS / AP BRIDGE
+============================================================
+
+auto vmbr3
+iface vmbr3 inet manual
+        bridge-ports enp5s0
+        bridge-stp off
+        bridge-fd 0
+        bridge-vlan-aware yes
+        bridge-vids 70 80 90
+        bridge-pvid 90
+
+Purpose:
+
+vmbr3 provides a separate network path for:
+
+VLAN 70 - IoT
+VLAN 80 - Guest
+VLAN 90 - ASUS Management
+
+PVID 90 is used on this bridge.
+
+This network path is physically separated from the main
+vmbr1 trunk.
+
+
+============================================================
+6. VIRTUAL MACHINE / CONTAINER VLAN EXAMPLES
+============================================================
+
+Examples of services connected to vmbr1:
+
+Pulse LXC
+Bridge: vmbr1
+VLAN: 10
+
+Nginx Proxy Manager LXC
+Bridge: vmbr1
+VLAN: 10
+
+Pi-hole LXC
+Bridge: vmbr1
+VLAN: 20
+
+HashiCorp Vault VM
+Bridge: vmbr1
+VLAN: 18
+
+K3s VM
+Bridge: vmbr1
+VLAN: 15
+
+
+Example configuration:
+
+net0:
+bridge=vmbr1
+tag=<VLAN-ID>
+
+
+This ensures that each workload is explicitly connected to
+its intended VLAN.
+
+
+============================================================
+7. OPNSENSE VM NETWORKING
+============================================================
+
+OPNsense is connected to multiple Proxmox bridges.
+
+Example:
+
+net0 -> vmbr1
+net1 -> vmbr2
+net2 -> vmbr3
+
+
+vmbr1 carries tagged internal VLANs.
+
+OPNsense creates VLAN interfaces internally for networks such as:
+
+10  - Management
+15  - Kubernetes
+18  - HashiCorp Vault
+20  - DNS
+25  - Minisforum
+30  - Honeypot
+35  - Lab service
+40  - NAS
+50  - Jetson
+55  - LIA
+60  - AP
+95  - Ansible
+
+
+vmbr3 is used for:
+
+70 - IoT
+80 - Guest
+90 - ASUS Management
+
+
+============================================================
+8. SECURITY DESIGN
+============================================================
+
+The Proxmox network design follows these principles:
+
+- No management IP directly on the main base bridge
+- Dedicated management VLAN
+- VLAN-aware bridges
+- Explicit VLAN tags for workloads
+- OPNsense controls inter-VLAN routing
+- Separate bridge for ASUS / IoT / Guest networks
+- VLAN 1 is not used for Proxmox management
+
+
+Simplified design:
+
+                 Proxmox VE
+                     |
+                   vmbr1
+              VLAN-aware trunk
+                     |
+        +------------+------------+
+        |            |            |
+      VLAN10       VLAN15       VLAN20
+    Management    Kubernetes      DNS
+
+
+============================================================
+9. VERIFICATION COMMANDS
+============================================================
+
+Useful commands:
+
+ip -br addr
+
+ip route
+
+cat /etc/network/interfaces
+
+bridge vlan show
+
+
+LXC network configuration:
+
+grep -H '^net[0-9]:' /etc/pve/lxc/*.conf
+
+
+VM network configuration:
+
+for id in $(qm list | awk 'NR>1 {print $1}'); do
+    echo "===== VM $id ====="
+    qm config "$id" | grep '^net'
+done
+
+
+============================================================
+SANITIZATION NOTE
+============================================================
+
+The following information is intentionally excluded from this
+public portfolio example:
+
+- Passwords
+- API tokens
+- SSH private keys
+- Certificates
+- Public IP addresses
+- Authentication secrets
+- Backup credentials
+- Other sensitive configuration data
