@@ -24,7 +24,6 @@ The goal is to reduce unnecessary access between systems and create clear securi
 | 40 | NAS | Storage, NFS and SMB |
 | 50 | Jetson | NVIDIA Jetson / AI workloads |
 | 55 | LIA | LIA / test environment |
-| 60 | AP | Access point network |
 | 70 | IoT | IoT devices |
 | 80 | Guest | Guest network |
 | 90 | ASUS Management | ASUS/AP administration |
