@@ -1,1 +1,289 @@
+============================================================
+Cisco WS-C2960L - Sanitized Homelab Configuration
+============================================================
 
+Purpose:
+This file contains a sanitized example of the Cisco switch
+configuration used in my cybersecurity homelab.
+
+Sensitive information such as passwords, secrets, SSH keys
+and authentication configuration has intentionally been removed.
+
+The configuration focuses on:
+- VLAN segmentation
+- Management VLAN
+- Access ports
+- 802.1Q trunks
+- Native VLAN hardening
+- Restricted VLAN propagation
+- Disabled unused ports
+
+
+============================================================
+1. MANAGEMENT
+============================================================
+
+hostname Cisco-Switch
+
+interface Vlan1
+ no ip address
+ shutdown
+
+interface Vlan10
+ description Management
+ ip address 172.16.10.10 255.255.255.224
+ no shutdown
+
+ip default-gateway 172.16.10.1
+
+
+Management is separated from the default VLAN.
+
+VLAN 1 is not used for switch administration.
+
+The Cisco switch is managed through VLAN 10.
+
+
+============================================================
+2. VLAN DEFINITIONS
+============================================================
+
+vlan 10
+ name LAN_MGNT_10
+
+vlan 15
+ name K8s-Pi-Cluster
+
+vlan 18
+ name HASHICORP_VAULT_18
+
+vlan 25
+ name Minisforum
+
+vlan 40
+ name Storage-NAS
+
+vlan 50
+ name Jetson-Orin-AI
+
+vlan 55
+ name LIA_55
+
+vlan 95
+ name Ansible-Bastion
+
+vlan 999
+ name NATIVE-BLACKHOLE
+
+
+VLAN 999 is not used by clients or servers.
+
+It is used as an unused native/black-hole VLAN on trunk links.
+
+
+============================================================
+3. KUBERNETES ACCESS PORTS
+============================================================
+
+interface GigabitEthernet0/2
+ description K3s-Node
+ switchport access vlan 15
+ switchport mode access
+
+interface GigabitEthernet0/4
+ description K3s-Node
+ switchport access vlan 15
+ switchport mode access
+
+interface GigabitEthernet0/6
+ description K3s-Node
+ switchport access vlan 15
+ switchport mode access
+
+interface GigabitEthernet0/8
+ description K3s-Node
+ switchport access vlan 15
+ switchport mode access
+
+interface GigabitEthernet0/10
+ description K3s-Node
+ switchport access vlan 15
+ switchport mode access
+
+interface GigabitEthernet0/12
+ description K3s-Radxa
+ switchport access vlan 15
+ switchport mode access
+
+
+These ports provide untagged access to the Kubernetes VLAN.
+
+
+============================================================
+4. INFRASTRUCTURE ACCESS PORTS
+============================================================
+
+interface GigabitEthernet0/14
+ description NAS
+ switchport access vlan 40
+ switchport mode access
+
+interface GigabitEthernet0/16
+ description Jetson-Orin
+ switchport access vlan 50
+ switchport mode access
+
+interface GigabitEthernet0/18
+ description Ansible-Bastion
+ switchport access vlan 95
+ switchport mode access
+
+
+Each infrastructure device is placed in its own dedicated VLAN.
+
+
+============================================================
+5. TRUNK TO MINISFORUM
+============================================================
+
+interface GigabitEthernet0/20
+ description Minisforum
+ switchport trunk native vlan 999
+ switchport trunk allowed vlan 15,18,25,40,50,55
+ switchport mode trunk
+ switchport nonegotiate
+
+
+VLAN 10 is intentionally not allowed on this trunk.
+
+This prevents the Minisforum server from obtaining direct
+Layer 2 access to the management VLAN.
+
+Management access to the Minisforum is instead routed through
+OPNsense and controlled by firewall policy.
+
+
+============================================================
+6. TRUNK TO TP-LINK
+============================================================
+
+interface GigabitEthernet0/24
+ description Trunk-to-TPLink
+ switchport trunk native vlan 999
+ switchport trunk allowed vlan 10,15,18,20,25,30,40,50,55,60,95
+ switchport mode trunk
+ switchport nonegotiate
+
+
+Gi0/24 connects to TP-Link TL-SG108E Port 7.
+
+Management VLAN 10 and the required infrastructure VLANs are
+transported using explicit 802.1Q tags.
+
+VLAN 1 is not included in the allowed VLAN list.
+
+Native VLAN 999 is used for unexpected untagged traffic.
+
+
+============================================================
+7. UNUSED PORT HARDENING
+============================================================
+
+Unused physical switch ports are administratively disabled.
+
+Example:
+
+interface GigabitEthernet0/1
+ description UNUSED-SHUTDOWN
+ shutdown
+
+interface GigabitEthernet0/3
+ description UNUSED-SHUTDOWN
+ shutdown
+
+interface GigabitEthernet0/5
+ description UNUSED-SHUTDOWN
+ shutdown
+
+!
+! Additional unused ports are configured in the same way.
+!
+
+
+This reduces the risk of unauthorized devices receiving
+network connectivity through unused physical switch ports.
+
+
+============================================================
+8. SECURITY DESIGN SUMMARY
+============================================================
+
+Management:
+ VLAN 10
+
+Switch management:
+ 172.16.10.10/27
+
+Default VLAN:
+ VLAN 1 is not used for management
+
+Native VLAN:
+ VLAN 999 on important Cisco trunks
+
+Gi0/20 -> Minisforum:
+ Allowed VLANs:
+ 15,18,25,40,50,55
+
+Gi0/24 -> TP-Link:
+ Allowed VLANs:
+ 10,15,18,20,25,30,40,50,55,60,95
+
+Unused switch ports:
+ Administratively shutdown
+
+
+The configuration follows a segmented design where access
+ports are assigned to dedicated VLANs and trunk ports only
+transport VLANs required by the connected infrastructure.
+
+
+============================================================
+9. VERIFICATION COMMANDS
+============================================================
+
+Useful commands used during configuration and troubleshooting:
+
+show vlan brief
+
+show interfaces trunk
+
+show ip interface brief
+
+show mac address-table dynamic
+
+show running-config interface GigabitEthernet0/20
+
+show running-config interface GigabitEthernet0/24
+
+
+The running configuration is saved after verified changes:
+
+copy running-config startup-config
+
+
+============================================================
+SANITIZATION NOTE
+============================================================
+
+The following information is intentionally excluded from this
+public portfolio example:
+
+- Passwords
+- Enable secrets
+- User credentials
+- SSH keys
+- Authentication secrets
+- SNMP community strings
+- Private certificates
+- API tokens
+- Other sensitive security information
