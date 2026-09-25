@@ -1,0 +1,160 @@
+---
+- name: Update K3s nodes one at a time
+  hosts: k3s_cluster
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  vars:
+    k3s_version: "{{ required_k3s_version | default('REQUIRED_AT_RUNTIME') }}"
+    k3s_sha256: "{{ required_k3s_sha256 | default('REQUIRED_AT_RUNTIME') }}"
+    k3s_binary_path: /usr/local/bin/k3s
+    k3s_candidate_path: /usr/local/bin/k3s.candidate
+    k3s_rollback_path: /usr/local/bin/k3s.rollback
+    k3s_control_host: "{{ groups['k3s_control_plane'][0] }}"
+
+  pre_tasks:
+    - name: Require an explicit release and checksum
+      ansible.builtin.assert:
+        that:
+          - k3s_version is match('^v[0-9]+\\.[0-9]+\\.[0-9]+\\+k3s[0-9]+$')
+          - k3s_sha256 is match('^[a-fA-F0-9]{64}$')
+        fail_msg: >-
+          Pass required_k3s_version and its verified 64-character
+          required_k3s_sha256. No default binary is trusted.
+
+    - name: Verify that the node is Ready before maintenance
+      ansible.builtin.command:
+        argv:
+          - "{{ k3s_binary_path }}"
+          - kubectl
+          - get
+          - node
+          - "{{ inventory_hostname }}"
+          - -o
+          - jsonpath={.status.conditions[?(@.type=="Ready")].status}
+      delegate_to: "{{ k3s_control_host }}"
+      register: node_ready_before
+      changed_when: false
+      failed_when: node_ready_before.stdout != 'True'
+
+  tasks:
+    - name: Upgrade with rollback protection
+      block:
+        - name: Preserve the currently installed binary
+          ansible.builtin.copy:
+            src: "{{ k3s_binary_path }}"
+            dest: "{{ k3s_rollback_path }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Download the selected K3s release with checksum verification
+          ansible.builtin.get_url:
+            url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+            dest: "{{ k3s_candidate_path }}"
+            checksum: "sha256:{{ k3s_sha256 }}"
+            owner: root
+            group: root
+            mode: "0755"
+            force: true
+
+        - name: Validate the candidate binary
+          ansible.builtin.command:
+            argv:
+              - "{{ k3s_candidate_path }}"
+              - --version
+          register: candidate_version
+          changed_when: false
+          failed_when: k3s_version not in candidate_version.stdout
+
+        - name: Drain the node
+          ansible.builtin.command:
+            argv:
+              - "{{ k3s_binary_path }}"
+              - kubectl
+              - drain
+              - "{{ inventory_hostname }}"
+              - --ignore-daemonsets
+              - --delete-emptydir-data
+              - --timeout=10m
+          delegate_to: "{{ k3s_control_host }}"
+          changed_when: true
+
+        - name: Stop K3s
+          ansible.builtin.systemd_service:
+            name: "{{ 'k3s' if inventory_hostname in groups['k3s_control_plane'] else 'k3s-agent' }}"
+            state: stopped
+
+        - name: Install the verified binary
+          ansible.builtin.copy:
+            src: "{{ k3s_candidate_path }}"
+            dest: "{{ k3s_binary_path }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Start K3s
+          ansible.builtin.systemd_service:
+            name: "{{ 'k3s' if inventory_hostname in groups['k3s_control_plane'] else 'k3s-agent' }}"
+            state: started
+            enabled: true
+
+        - name: Wait until the updated node is Ready
+          ansible.builtin.command:
+            argv:
+              - "{{ k3s_binary_path }}"
+              - kubectl
+              - get
+              - node
+              - "{{ inventory_hostname }}"
+              - -o
+              - jsonpath={.status.conditions[?(@.type=="Ready")].status}
+          delegate_to: "{{ k3s_control_host }}"
+          register: node_ready_after
+          changed_when: false
+          until: node_ready_after.stdout == 'True'
+          retries: 30
+          delay: 10
+
+      rescue:
+        - name: Restore the previous K3s binary
+          ansible.builtin.copy:
+            src: "{{ k3s_rollback_path }}"
+            dest: "{{ k3s_binary_path }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Restart K3s after rollback
+          ansible.builtin.systemd_service:
+            name: "{{ 'k3s' if inventory_hostname in groups['k3s_control_plane'] else 'k3s-agent' }}"
+            state: restarted
+
+        - name: Stop the rollout after rollback
+          ansible.builtin.fail:
+            msg: "Update failed on {{ inventory_hostname }}; the previous binary was restored."
+
+      always:
+        - name: Return the node to scheduling
+          ansible.builtin.command:
+            argv:
+              - "{{ k3s_binary_path }}"
+              - kubectl
+              - uncordon
+              - "{{ inventory_hostname }}"
+          delegate_to: "{{ k3s_control_host }}"
+          register: uncordon_result
+          changed_when: "'uncordoned' in uncordon_result.stdout"
+
+        - name: Remove temporary binaries
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ k3s_candidate_path }}"
+            - "{{ k3s_rollback_path }}"
