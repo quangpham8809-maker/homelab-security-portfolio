@@ -1,9 +1,8 @@
-
-# Kubernetes Network Security – Rosa Nails
+# Kubernetes Network Security – Nagelsalong
 
 ## Projektöversikt
 
-Detta arbetsprov granskar hur Kubernetes NetworkPolicies begränsar nätverkstrafik mellan pods i applikationen Rosa Nails. Utan nätverkssegmentering kan en komprometterad pod ofta försöka nå fler interna tjänster än den behöver. NetworkPolicies uttrycker tillåtna trafikflöden på podnivå, förutsatt att klustrets nätverksplugin verkställer dem.
+Detta arbetsprov granskar hur Kubernetes NetworkPolicies begränsar nätverkstrafik mellan pods i applikationen Rose Nails. Utan nätverkssegmentering kan en komprometterad pod ofta försöka nå fler interna tjänster än den behöver. NetworkPolicies uttrycker tillåtna trafikflöden på podnivå, förutsatt att klustrets nätverksplugin verkställer dem.
 
 Filerna här är sanerade dokumentationsexempel. De är kopior för portföljgranskning, inte produktionsfiler och inte en källa för GitOps.
 
