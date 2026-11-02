@@ -1,1 +1,28 @@
-
+# Dokumentationsexempel – namespace, etiketter och port är generiska demovärden.
+# Policyn begränsar utgående trafik från frontend-pods i namespace demo-app.
+# Destinationens podSelector väljer endast backend-pods med app=backend
+# i samma namespace som policyn. TCP 8000 är backendens demovärde.
+# Ingen generell internetåtkomst eller DNS-regel ingår.
+# NetworkPolicy matchar pod-/IP-trafik och portar, inte HTTP-sökvägar.
+# Om default deny isolerar båda pods måste denna egressregel och en motsvarande
+# backend-ingressregel tillåta anslutningen. De två reglerna begränsar åtkomsten
+# enligt least privilege och minskar oönskad lateral kommunikation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-egress
+  namespace: demo-app
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 8000
