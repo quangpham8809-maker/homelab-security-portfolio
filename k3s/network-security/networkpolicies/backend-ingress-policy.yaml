@@ -1,1 +1,35 @@
-
+# Dokumentationsexempel – namespace, etiketter och portar är generiska demovärden.
+# Policyn väljer backend-pods med app=backend i namespace demo-app.
+# Backend tar emot TCP 8000 från frontend i samma namespace och från
+# ingress-controller i namespace ingress-system.
+# Källorna i listan är alternativ (ELLER). För ingress-controllern kombineras
+# namespaceSelector och podSelector med OCH, så båda måste matcha samma källa.
+# TCP 8000 är backendens demovärde. Avgränsningen minskar attackytan och
+# begränsar vilka pods som kan nå backend, vilket motverkar lateral rörelse.
+# Med default deny krävs en uttrycklig ingressregel; frontend behöver även
+# frontend-egress-policy för sitt anrop till backend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-ingress
+  namespace: demo-app
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+          podSelector:
+            matchLabels:
+              app: ingress-controller
+      ports:
+        - protocol: TCP
+          port: 8000
