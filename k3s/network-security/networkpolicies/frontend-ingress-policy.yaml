@@ -1,1 +1,30 @@
-
+# Dokumentationsexempel – namespace, etiketter och port är generiska demovärden.
+# Policyn begränsar inkommande trafik till frontend-pods i namespace demo-app.
+# Endast ingress-controllerns pods i namespace ingress-system får ansluta.
+# namespaceSelector och podSelector i samma peer kombineras med OCH:
+# källpodden måste matcha båda selector-villkoren.
+# TCP 80 är en demonstrationsport för HTTP-trafik till frontend.
+# Med default deny för ingress krävs denna uttryckliga tillåtelse för flödet.
+# Regeln minskar oönskad åtkomst och lateral rörelse mot frontend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  namespace: demo-app
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+          podSelector:
+            matchLabels:
+              app: ingress-controller
+      ports:
+        - protocol: TCP
+          port: 80
