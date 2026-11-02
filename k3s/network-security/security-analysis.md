@@ -1,67 +1,87 @@
+# Säkerhetsanalys av Kubernetes NetworkPolicies
 
-# Säkerhetsanalys
+## Omfattning och evidens
 
-## Omfattning och metod
+Analysen gäller den lokalt granskade policyuppsättningen: 15 NetworkPolicy-resurser i 12 policyfiler samt en separat Kustomization-fil. Produktionsoverlayen tilldelar applikationsresurserna namespace `nagelsalong`. Analysen är statisk och bygger på manifestinnehåll och tillgängliga workload-manifest. Den beskriver deklarerade regler, inte observerade nätverksflöden.
 
-Granskningen omfattar 12 policy-YAML-filer med 15 NetworkPolicy-resurser samt Kustomize-referenser i applikationens bas och produktionsoverlay. Analysen är statisk. Inga ändringar eller klusterkommandon har utförts. I materialet sätts namespace av produktionsoverlayen till `nagelsalong`; policyfilerna saknar eget namespacefält.
+**Verifierat i manifest:** selectors, policytyper, tillåtna portar/protokoll, deklarerad default-deny och att policyreglerna är additiva.
 
-Kubernetes NetworkPolicies är additiva. Egress bedöms på källpodden och ingress på destinationspodden. En ingressregel på DB och en egressregel på klienten behöver båda tillåta samma kommunikation när respektive sida är isolerad.
+**Tidigare rapporterade kontroller:** lokal Kustomize-rendering av policykatalogen samt jämförelse av funktionellt YAML-innehåll mellan original och dokumentationskopior.
 
-## Fynd
+**Ej verifierat:** aktiva pods/etiketter, faktisk pod-kommunikation, CNI-verkställighet, komplett policyuppsättning utanför granskad katalog, RBAC och databasbehörigheter.
 
-### Medium – Extern egress tillåter breda publika destinationer (verifierat i manifest)
+Kubernetes NetworkPolicies är additiva. För en anslutning mellan två isolerade pods måste källans egress tillåta utgående trafik och destinationens ingress tillåta inkommande trafik. För externa eller andra-namespaces destinationspods beror vilken sida som är isolerad på deras egna policies.
 
-**Problem:** Backend, GDPR-jobb, Instagram-refresher och statistikjobb har `ipBlock: 0.0.0.0/0` med undantag för en lista privata/särskilda nät. Tillåtna portar är TCP 443, och för backend även 587/465.
+## Medium – Bred publik egress
 
-**Risk och möjlig exploatering:** En komprometterad pod kan försöka skicka data till angriparkontrollerade publika servrar eller nå andra publika tjänster på de tillåtna portarna. Undantagen begränsar destinationer men ger inte destinationsallowlisting. Egress mot CIDR kan också påverkas av CNI, routing och NAT.
+### Vad som är deklarerat
 
-**Rekommendation:** Verifiera de faktiska beroendena. Överväg kontrollerad egressproxy/FQDN-filtering eller hanterade egressregler med dokumenterad destinationslista där plattformen stödjer det. Kontrollera service-CIDR, node/LAN-rutter och NAT-beteende innan slutsats om isolering dras.
+Följande policies har egressregler med `ipBlock.cidr: 0.0.0.0/0`, undantag för listade privata/särskilda nät och begränsade portar:
 
-**Status:** Konfigurationsbredden är verifierad statiskt; exploaterbar väg och faktisk nätverksräckvidd behöver testas i icke-produktionsmiljö.
+- `allow-backend-egress`: TCP 443, 587 och 465.
+- `allow-gdpr-anonymize-egress`: TCP 443.
+- `allow-instagram-refresher-egress`: TCP 443.
+- `allow-statistics-egress`: TCP 443.
 
-### Low – Selektorer och täckning är beroende av etiketter och overlay (behöver verifieras)
+### Risk
 
-**Problem:** Policies matchar exakta `app`-etiketter och förlitar sig på att overlayens namespace-transformering och workload-etiketter är korrekta. PodSelectors utan namespaceSelector gäller bara inom policyns namespace. Traefik- och CoreDNS-regler kräver att både namespace- och podselektorn matchar.
+`0.0.0.0/0` omfattar alla IPv4-destinationer innan undantagen tillämpas. Portbegränsning begränsar tjänstporten, men inte den publika destinationen. En komprometterad pod kan därför försöka kommunicera med oönskade publika servrar på tillåtna portar, vilket kan ge en kanal för datautflöde eller nå andra publika tjänster. De listade CIDR-undantagen är inte en destinationsallowlist för specifika API:er. Exakt räckvidd kan påverkas av CNI, routing, service-CIDR och NAT.
 
-**Risk och möjlig exploatering:** Om podar saknar förväntade etiketter eller använder fel etikett kan nödvändig trafik blockeras. Om en bred delad etikett används på oavsedd workload kan den få regelns nätverksrättigheter. En selector kan inte tillåta trafik som saknas, men annan additiv policy kan ge ytterligare åtkomst.
+### Rekommendation
 
-**Rekommendation:** Jämför renderad Kustomize-konfiguration med faktiska podetiketter och namnrymder. Dokumentera avsiktliga matchningar och kontrollera selectors i staging.
+Bekräfta externa beroenden per workload. Om plattformen stödjer det, överväg en kontrollerad egressproxy eller annan destinationskontroll och dokumentera dess begränsningar. Verifiera service-CIDR, NAT och CNI-beteende i en isolerad miljö innan någon slutsats dras om klusternätets åtkomst.
 
-**Status:** Selektoruttrycken är verifierade; faktisk workload-täckning är ej testad.
+**Status:** Regelbredden är verifierad i manifest. Faktisk nåbarhet och exploaterbarhet är ej testade.
 
-### Informational – Default deny finns deklarerad; verkställighet är inte verifierad
+## Low – Åtkomst till MariaDB och Redis
 
-**Problem:** `default-deny` väljer alla pods och anger både Ingress och Egress. Den inkluderas i nätverkspolicy-Kustomize-resurslistan och basen inkluderas av produktionsoverlayen. Manifestet i sig bevisar inte att aktivt kluster använder ett kompatibelt CNI eller att Argo CD lyckats applicera den.
+### Deklarerade klienter
 
-**Risk:** Om NetworkPolicy inte verkställs saknas det förväntade segmenteringsskyddet. Om den verkställs men undantag saknas kan arbetslaster tappa DNS eller beroenden.
+MariaDB med selector `app=rosanails-db` tillåter TCP 3306 från fyra klienttyper via separata ingressresurser:
 
-**Rekommendation:** I godkänd staging eller read-only klustergranskning, verifiera aktiv policy, CNI-stöd och Argo CD:s synkstatus; genomför därefter kontrollerade anslutningstester i isolerad testmiljö.
+- backend, via `allow-backend-to-db`;
+- GDPR-jobb, via `allow-gdpr-anonymize-to-db`;
+- statistikjobb, via `allow-statistics-to-db`;
+- retention-jobb, via `allow-retention-cleanup-to-db`.
 
-**Status:** Förekomst och Kustomize-referens verifierade statiskt; aktiv enforcement ej testad.
+Motsvarande egress till MariaDB TCP 3306 finns för backend och de tre jobben. Tillgängliga workload-manifest visar DB-konfiguration för dessa komponenter; GDPR-, statistik- och retention-jobben innehåller även init-containrar som väntar på MariaDB. Utifrån de manifesterna verkar åtkomsten motiverad. Faktiskt användningsbehov och DB-kontobehörigheter är inte verifierade.
 
-### Informational – Flera separata DB-ingressundantag (verifierat i manifest)
+Redis med selector `app=redis` tillåter TCP 6379 från backend och Instagram-refresher. Backend har motsvarande egressregel. Instagram-refresher har Redis-host/port konfigurerade och motsvarande egressregel. Detta ser motiverat ut utifrån tillgängliga manifest.
 
-**Problem:** Fyra policies tillåter åtkomst till `app=rosanails-db`: backend, GDPR-jobb, statistikjobb och retention-jobb på TCP 3306. Detta är separata, avsiktliga arbetslaster enligt namngivning/etiketter, inte dubbletter av samma regel.
+### Risk
 
-**Risk:** Varje ytterligare klient utökar mängden pods som kan nå databasen. En komprometterad klient kan nå DB-tjänsten, även om databasskiktets autentisering/behörigheter separat begränsar åtkomst.
+En komprometterad tillåten pod kan ansluta till databasen eller Redis på nätverksnivå. Nätverksreglerna anger inte vilka SQL-operationer, Redis-kommandon eller data som klienten får använda. Om backend komprometteras finns deklarerade vägar till både MariaDB och Redis; kompromettering av ett av batchjobben ger en väg till MariaDB. Detta är avsiktliga beroenden, men utgör möjliga pivotvägar.
 
-**Rekommendation:** Bekräfta att alla fyra jobb behöver DB-åtkomst och att etiketter är unika nog. Behåll applikations- och databasautentisering; NetworkPolicy ersätter inte dessa kontroller.
+### Rekommendation
 
-**Status:** Reglerna är verifierade statiskt; faktisk nödvändighet och DB-behörigheter ej testade.
+Behåll separata applikations- och databasbehörigheter, begränsa DB-konton efter arbetslast där det är praktiskt, och kontrollera att inga andra pods delar de använda `app`-etiketterna. Granska jobben och klientlistan vid förändringar. Inga NetworkPolicy-regler har ändrats i denna granskning.
 
-## Granskning per område
+**Status:** Tillåtna klienttyper och portar verifierade statiskt. Faktiska anslutningar, etikettunikhet och DB-/Redis-autentisering är ej testade.
 
-1. **Default-deny-isolering:** Ja, manifestet väljer alla pods och isolerar ingress samt egress. Verklig enforcement ej verifierad.
-2. **Ingress:** Frontend tillåts från Traefik på TCP 80. Backend tillåter Traefik, frontend och två jobb på TCP 8000. DB tillåter fyra namngivna klienttyper på TCP 3306. Redis tillåter backend och Instagram-refresher på TCP 6379.
-3. **Egress:** Frontend och cronjobs har snäva interna flöden. Backend och vissa jobb har bred publik egress på angivna TCP-portar. Övriga workloads saknar särskild egresspolicy i denna katalog och ska, om default deny gäller, vara egressisolerade.
-4. **Pod- och namespace-selectors:** Samma-namespace-villkoret gäller för fristående podSelector. Kombinationer av namespaceSelector och podSelector kräver båda villkoren. Overlayens namespace är `nagelsalong`.
-5. **DNS-undantag:** Flera workloadregler tillåter UDP och TCP 53 till pods märkta `k8s-app=kube-dns` i `kube-system`. Matchning av labels, DNS serviceväg och eventuellt node-local DNS behöver verifieras.
-6. **Databaskommunikation:** TCP 3306 från backend samt GDPR-, statistik- och retention-jobb tillåts av DB-ingressregler; motsvarande egress finns för dessa klienter.
-7. **Redis:** TCP 6379 från backend och Instagram-refresher tillåts. Backend har motsvarande egress; Redis egress behövs inte för dessa inkommande sessioner.
-8. **Lateral movement:** Default deny och selektiva selectors minskar lateral rörelse mellan matchade pods. Effekt beror på CNI enforcement och andra policies som kan addera tillåtelse.
-9. **Överdrivna regler:** Extern egress på 0.0.0.0/0 är bred i destination. Inga duplicerade resursnamn eller exakta upprepade regler hittades i den inventerade katalogen. DNS-regler upprepas avsiktligt per workload.
-10. **Möjliga förbättringar:** Validera renderad manifest och etiketter, klargör externa destinationer, granska cluster/service CIDR/NAT/CNI, och testa policy i staging. Ändra inte produktionsmanifest utan separat granskning och godkännande.
+## Low, villkorat – Pod-etiketter och RBAC
 
-## Begränsningar
+### Vad som är deklarerat
 
-Analysen kan inte fastställa vilka pods som kör, om portarna faktiskt lyssnar, om all egress är nödvändig, hur CNI hanterar `ipBlock`, om NodeLocal DNS används eller om det finns andra NetworkPolicies utanför katalogen. Läs [testresultat](test-results.md) för status.
+Policies väljer pods med `app`-etiketter. PodSelectors utan namespaceSelector avser pods i samma namespace som policyn. DNS- och Traefikreglerna kombinerar namespaceSelector och podSelector; båda villkoren måste matcha.
+
+### Risk
+
+NetworkPolicy identiteten kopplas till etiketter, inte till arbetslastens namn eller service account. Om en användare med för generös RBAC får skapa pods i samma namespace och kan ange etiketter som exempelvis `app=rosanails-backend`, kan den podden få de nätverksrättigheter som följer av matchande policies. Detta är en villkorad risk: granskningen visar inte vilka användare som har RBAC-behörighet att skapa pods eller ändra workloads.
+
+### Rekommendation
+
+Granska namespace-RBAC och begränsa vem som får skapa eller ändra Pods, Deployments, Jobs och CronJobs. Använd policyer för admission/kontroll av etiketter om klustermodellen kräver det. Jämför selectors med faktiska workload-labels i en godkänd, read-only kontroll.
+
+**Status:** Selectorvillkoren är verifierade i manifest. Möjlighet till etikettmissbruk och RBAC-risk är ej verifierade.
+
+## Övriga kontrollerade områden
+
+- **Default Deny:** `default-deny` väljer alla pods och anger både Ingress och Egress. Den finns med i policykatalogens Kustomization. Att den är aktivt applicerad och verkställs är ej verifierat.
+- **Frontend och backend:** frontend egress tillåter DNS samt backend TCP 8000; backend ingress tillåter Traefik, frontend och två namngivna jobb TCP 8000. Traefik till frontend TCP 80 deklareras. Konfigurationen visar ingen deklarerad direkt frontend → MariaDB/Redis-väg i den granskade uppsättningen.
+- **DNS:** utvalda workloads tillåter UDP/TCP 53 till pods i `kube-system` med etiketten `k8s-app=kube-dns`. Faktisk DNS-routing, till exempel eventuell NodeLocal DNS, är ej verifierad.
+- **Redis:** ingress tillåts från backend och Instagram-refresher på TCP 6379. Övriga policies kan addera ytterligare tillåtelser; fullständiga klusterpolicies utanför granskad katalog ingår inte.
+- **Policyöverlapp:** DB-ingressregler är separata klientundantag, inte dubbletter av samma klientregel. DNS-undantag upprepas per workload. Inga oavsiktliga direkta vägar från frontend till DB/Redis identifierades i de granskade 15 resurserna.
+
+## Slutsats
+
+Konfigurationen deklarerar en default-deny-bas med separata undantag för identifierade applikationsflöden. Den tydligaste förbättringsmöjligheten är att granska destinationerna för de fyra breda publika egressreglerna. DB- och Redis-vägarna verkar behövas enligt workload-manifesten, men bör fortsatt betraktas som möjliga pivotvägar vid kompromettering av en tillåten klient. RBAC- och CNI-status behöver verifieras innan operativa slutsatser dras.
