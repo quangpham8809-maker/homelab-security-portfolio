@@ -1,1 +1,19 @@
+# Dokumentationsexempel – inte en produktionspolicy.
+# Policyn isolerar alla pods i namespace demo-app för inkommande och
+# utgående trafik. Därefter behövs separata policies för de trafikflöden
+# som applikationen faktiskt behöver.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: demo-app
+spec:
+  # En tom podSelector väljer alla pods i policyns namespace.
+  # Pods i andra namespaces väljs inte.
+  podSelector: {}
 
+  # Isolera båda trafikriktningarna. Eftersom denna policy inte innehåller
+  # några ingress- eller egressregler tillåter den själv ingen trafik.
+  policyTypes:
+    - Ingress
+    - Egress
