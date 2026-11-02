@@ -1,1 +1,36 @@
-
+# Dokumentationsexempel – namespace, etiketter och portar är generiska demovärden.
+# Policyn begränsar utgående trafik från backend-pods med app=backend
+# i namespace demo-app. Endast database och cache tillåts som destinationspods.
+# PodSelectors utan namespaceSelector väljer pods i samma namespace som policyn.
+# TCP 3306 och TCP 6379 är demonstrationsportar för database respektive cache.
+# Inga externa destinationer eller DNS-undantag ingår: exemplen visar direkt
+# pod-till-pod-åtkomst med selectors och portar, inte namnuppslagning via DNS.
+# Med default deny behöver även mottagarnas egna ingress-policies tillåta dessa
+# anslutningar. De ingår inte bland de fyra exemplen och måste läggas till i en
+# fungerande isolerad demo. Smala egressregler begränsar lateral rörelse.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-egress
+  namespace: demo-app
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: database
+      ports:
+        - protocol: TCP
+          port: 3306
+    - to:
+        - podSelector:
+            matchLabels:
+              app: cache
+      ports:
+        - protocol: TCP
+          port: 6379
