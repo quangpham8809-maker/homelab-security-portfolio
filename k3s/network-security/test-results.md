@@ -1,24 +1,28 @@
+# Testresultat och verifieringsstatus
 
-# Testresultat och verifiering
+## Tidigare rapporterade statiska kontroller
 
-## Genomfört
+Följande kontroller genomfördes och rapporterades i den tidigare dokumentationsgranskningen. De upprepades inte i den här redigeringsomgången:
 
-- **Statisk inventering:** 12 policy-YAML-filer, 15 NetworkPolicy-resurser identifierade.
-- **Kustomize-referenser:** Kontrollerat att networkpolicies-katalogen inkluderas av basen och produktionsoverlayen; overlayen sätter namespace `nagelsalong`.
-- **Konfigurationsgranskning:** Granskat selectors, ingress/egress, protokoll, portar, additiva regler, DNS och externa CIDR-regler.
-- **Portföljkopior:** YAML-filerna har endast fått svenska kommentarhuvuden; resursernas funktionella YAML-innehåll har bevarats.
-- **Klusterkommunikation:** Ej testat.
+- **Kustomize-rendering av policykatalogen:** tidigare rapporterad som lyckad för originalkatalogen och dokumentationskopiorna.
+- **Funktionell jämförelse:** tidigare rapporterad jämförelse av rader utan YAML-kommentarer; inga funktionella skillnader hittades i de kopierade policyfilerna och Kustomization-filen.
+- **Inventering:** 15 NetworkPolicy-resurser i 12 YAML-filer med policyresurser; därtill en separat Kustomization-fil.
+- **Statisk granskning:** selectors, policytyper, ingress/egress, portar, protokoll, DNS-undantag och additiva regler granskades mot tillgängliga manifests.
+
+Kustomize-rendering är en lokal manifesttransformation. Den bevisar inte att API-servern skulle acceptera en full produktionsdeployment eller att en aktiv klustermiljö verkställer NetworkPolicies.
 
 ## Ej testat
 
-- YAML/Kubernetes-schema-validering med `kubectl kustomize` eller API-server.
-- Kustomize-rendering av full produktionsoverlay.
-- Att aktivt CNI verkställer NetworkPolicies.
-- Att podetiketter, DNS-labels, namespace och portar matchar körande workload.
-- Faktisk anslutning frontend → backend, backend → DB/Redis, jobb → mål, Traefik → tjänster.
-- Extern HTTPS/SMTP och destinationskontroll.
-- Service-CIDR, NAT och node-local DNS-effekter.
+- Faktisk pod-till-pod-kommunikation, tillåten eller blockerad.
+- Aktiv CNI-verkställighet av NetworkPolicies.
+- Fullständig rendering eller validering av hela produktionsoverlayen.
+- API-serverns schema- eller admission-validering.
+- Att körande pod-etiketter, portar och namespace motsvarar manifests.
+- DNS- och service-routing i det aktiva klustret.
+- Extern HTTPS/SMTP, destinationskontroll, service-CIDR, NAT eller node-local DNS.
+- RBAC-behörighet att skapa pods eller välja policy-matchande etiketter.
+- Databas- och Redis-konton, autentisering och applikationsbehörigheter.
 
 ## Säker verifieringsplan
 
-Kör framtida tester i staging eller annan isolerad miljö med samma CNI och representativa etiketter. Använd endast read-only-inspektion av produktionsklustret om det uttryckligen behövs; starta inga testpods och ändra inga resurser. Validera renderad konfiguration och jämför mot faktiska labels, kontrollera policy enforcement, och testa tillåtna respektive nekade flöden i isolerad testmiljö. Registrera datum, miljö, kommando och faktisk utdata innan resultat märks som verifierade.
+Om ytterligare verifiering behövs, använd först en isolerad testmiljö med motsvarande CNI och representativa labels. Testa där både tillåtna flöden och flöden som policysammanställningen förväntas blockera. Dokumentera miljö, metod och faktiska resultat innan något markeras som verifierat. Produktionsmiljön har inte testats i denna granskning; inga testpods har skapats och inga klusterresurser har ändrats.
