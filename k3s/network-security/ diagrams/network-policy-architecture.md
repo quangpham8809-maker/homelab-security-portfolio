@@ -1,31 +1,71 @@
-# Nätverksflöden
+# Nätverksflöden och segmentering
 
-Heldragna pilar visar trafik som uttryckligen tillåts av policykopiorna. Streckade pilar visar tillåten generell DNS- eller publik egress där faktisk destination/funktion behöver verifieras. Diagrammet visar policyavsikt, inte observerad kommunikation.
+Diagrammen visar trafik som deklareras av den granskade policyuppsättningen. De visar inte observerad trafik. För kommunikation mellan två pods som båda isoleras krävs både källans egressregel och destinationens ingressregel. Trafik och aktiv CNI-verkställighet har inte testats.
+
+## Diagram A – Applikationskommunikation
 
 ```mermaid
 flowchart LR
-  T[Traefik<br/>kube-system] -->|Tillåten TCP 80| F[Frontend]
-  T -->|Tillåten TCP 8000| B[Backend]
-  F -->|Tillåten TCP 8000| B
-  B -->|Tillåten TCP 3306| DB[MariaDB]
-  B -->|Tillåten TCP 6379| R[Redis]
-  C[Send-reminders / watch-renewer] -->|Tillåten TCP 8000| B
-  G[GDPR-jobb] -->|Tillåten TCP 3306| DB
-  S[Statistikjobb] -->|Tillåten TCP 3306| DB
-  RC[Retention-jobb] -->|Tillåten TCP 3306| DB
-  I[Instagram-refresher] -->|Tillåten TCP 6379| R
-  F -.->|DNS UDP/TCP 53; ej klustertestat| DNS[CoreDNS]
-  B -.->|DNS UDP/TCP 53; ej klustertestat| DNS
-  C -.->|DNS UDP/TCP 53; ej klustertestat| DNS
-  G -.->|DNS UDP/TCP 53; ej klustertestat| DNS
-  S -.->|DNS UDP/TCP 53; ej klustertestat| DNS
-  RC -.->|DNS UDP/TCP 53; ej klustertestat| DNS
-  I -.->|DNS UDP/TCP 53; ej klustertestat| DNS
-  B -.->|Publik TCP 443/587/465; destination bred, ej verifierad| EXT[Externa tjänster]
-  G -.->|Publik TCP 443; destination bred, ej verifierad| EXT
-  S -.->|Publik TCP 443; destination bred, ej verifierad| EXT
-  I -.->|Publik TCP 443; destination bred, ej verifierad| EXT
+  T[Traefik<br/>kube-system] -->|TCP 80<br/>Ingress till Frontend tillåts| F[Frontend<br/>Nginx]
+  T -->|TCP 8000<br/>Ingress till Backend tillåts| B[Backend<br/>FastAPI]
+  F -->|TCP 8000<br/>Frontend egress + Backend ingress| B
+  B -->|TCP 3306<br/>Backend egress + MariaDB ingress| DB[MariaDB]
+  B -->|TCP 6379<br/>Backend egress + Redis ingress| R[Redis]
 ```
 
-Varje pil motsvarar en deklarerad regel. DNS är tillåten i manifest men dess faktiska funktion beror bland annat på klustrets DNS- och CNI-konfiguration. Extern egress anges med breda publika CIDR-regler och är inte verifierad mot tjänstspecifika IP-adresser. Ingen trafik ska tolkas som faktiskt uppmätt.
+Flödena är deklarerade av policies. Traefik-poddens egress omfattas inte av applikationsnamespacets default-deny-policy, eftersom Traefik väljs från `kube-system`; diagrammet beskriver därför Traefiks ingressväg utifrån mottagarens ingressregel.
 
+## Diagram B – CronJobs och externa tjänster
+
+```mermaid
+flowchart LR
+  subgraph Jobs[Jobb och schemalagda arbetslaster]
+    G[GDPR-jobb]
+    S[Statistikjobb]
+    RC[Retention-jobb]
+    I[Instagram-refresher]
+  end
+  DNS[CoreDNS<br/>kube-system]
+  DB[MariaDB]
+  R[Redis]
+  EXT[Externa tjänster<br/>publika IP-adresser]
+
+  G -->|TCP 3306<br/>Egress + DB ingress| DB
+  S -->|TCP 3306<br/>Egress + DB ingress| DB
+  RC -->|TCP 3306<br/>Egress + DB ingress| DB
+  I -->|TCP 6379<br/>Egress + Redis ingress| R
+
+  G -.->|UDP/TCP 53| DNS
+  S -.->|UDP/TCP 53| DNS
+  RC -.->|UDP/TCP 53| DNS
+  I -.->|UDP/TCP 53| DNS
+
+  G -.->|TCP 443<br/>Destination inte begränsad till API| EXT
+  S -.->|TCP 443<br/>Destination inte begränsad till API| EXT
+  I -.->|TCP 443<br/>Destination inte begränsad till API| EXT
+```
+
+GDPR-, statistik- och Instagram-policies använder breda publika CIDR-regler med undantag för listade nät. Källkommentarerna anger Google Calendar/OAuth, Telegram respektive Instagram/Graph API som avsikter, men NetworkPolicy-reglerna begränsar inte destinations-IP till dessa tjänster. Streckade pilar anger policytillåten trafik vars faktiska funktion inte har verifierats i klustret.
+
+## Diagram C – Säkerhetssegmentering
+
+```mermaid
+flowchart LR
+  DD[Default Deny<br/>isolerar ingress och egress<br/>för alla pods i namespace]
+  F[Frontend]
+  B[Backend]
+  DB[MariaDB]
+  DNS[CoreDNS]
+
+  B -->|Tillåten enligt policy<br/>TCP 3306; båda riktningar matchar| DB
+  F -.->|Blockerad enligt granskad regelmängd<br/>Frontend egress till DB saknas<br/>och DB ingress från Frontend saknas| DB
+  B -.->|DNS tillåten i policy<br/>UDP/TCP 53; faktisk trafik ej verifierad| DNS
+```
+
+Default Deny betyder att matchade pods isoleras; övriga granskade policies lägger till de tillåtelser som visas. Frontend → MariaDB är ett exempel på en anslutning som saknar både frontend-egressundantag och DB-ingressundantag i den granskade regelmängden. Därför skulle flödet blockeras om den granskade uppsättningen är fullständig för namespace och CNI verkställer reglerna. Blockeringen har inte verifierats med ett praktiskt nätverkstest. Andra policies utanför granskningen kan addera tillåtelser.
+
+### Teckenförklaring
+
+- Heldragen pil: deklarerat tillåtet flöde enligt policyreglerna.
+- Streckad pil: deklarerad blockering eller tillåten policyväg vars faktiska trafik inte har verifierats; etiketten anger vilket.
+- Diagrammen beskriver policyavsikt och policyanalys, inte mätresultat från ett aktivt kluster.
